@@ -1,0 +1,34 @@
+(* *********************************************************************)
+(*                                                                     *)
+(*              The Compcert verified compiler                         *)
+(*                                                                     *)
+(*                 Xavier Leroy, INRIA Paris                           *)
+(*                                                                     *)
+(*  Copyright Institut National de Recherche en Informatique et en     *)
+(*  Automatique.  All rights reserved.  This file is distributed       *)
+(*  under the terms of the INRIA Non-Commercial License Agreement.     *)
+(*                                                                     *)
+(* *********************************************************************)
+
+(** Instruction selection for 64-bit integer operations *)
+
+Require Import Coqlib.
+Require Import Compopts.
+Require Import AST Integers Floats.
+Require Import Op CminorSel.
+Require Import SelectOp SplitLong.
+
+Local Open Scope cminorsel_scope.
+Local Open Scope string_scope.
+
+Section SELECT.
+
+Context {hf: helper_functions}.
+
+Definition longofsingle (arg: expr) :=
+  Eexternal i64_ftos sig_s_l (arg ::: Enil).
+
+Definition longuofsingle (arg: expr) :=
+  Eexternal i64_ftou sig_s_l (arg ::: Enil).
+
+End SELECT.
