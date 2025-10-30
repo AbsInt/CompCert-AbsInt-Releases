@@ -1,0 +1,105 @@
+;; --- .ini / .config generation rules ---
+; For both the ini_creator and config_creator there is an implicit dependency on the binary itself, so the rule is evaluated again if the tool is changed.
+(rule
+ (targets compcert.ini)
+ (action (with-stdout-to compcert.ini
+  (run ini_creator))))
+
+(rule
+ (targets compcert.config)
+ (action (with-stdout-to compcert.config
+  (run config_creator))))
+
+; Generate a _CoqProject file and promote (i.e. copy) it to the source directory for IDE usage.
+; Note: If `dune build _CoqProject` is invoked without specifying a context, the build of the _CoqProject 
+;       file may be scheduled in an unpredictable order and only the last one remains as it overwrites the previous files.
+;       To ensure getting the correct _CoqProject file, run `dune build _build/<context>/_CoqProject`, which will get promoted to source. 
+; Note2: In the future, support for directly generating _CoqProjects files might be added to dune, which makes this unnecessary.
+;        see, https://github.com/ocaml/dune/pull/11752
+(rule
+ (targets _CoqProject)
+ ; if this is disabled there is an error when _CoqProject already exists in the root directory
+ ; VsCoq Legacy does have a setting `coq.coqProjectRoot` to set the location of the _CoqProject file
+ ; then we could just set the path to point into the _build directory, but the setting did not have an effect for me.
+ ; a.d. TODO configure script creates this file, too. So promote it until we fully switch to configure.ml
+ (mode promote)
+ (action (with-stdout-to _CoqProject
+  ; a.d. TODO is compcert.TargetPlatformCopy correct or should we use another logical path.
+  (echo "\| -R _build/%{context_name}/platform/lib compcert.lib
+        "\| -R _build/%{context_name}/platform/common compcert.common
+        "\| -R _build/%{context_name}/platform/TargetPlatform compcert.TargetPlatform
+        "\| -R _build/%{context_name}/platform/backend compcert.backend
+        "\| -R _build/%{context_name}/platform/cfrontend compcert.cfrontend
+        "\| -R _build/%{context_name}/platform/driver compcert.driver
+        "\| -R _build/%{context_name}/platform/cparser compcert.cparser
+        "\| -R _build/%{context_name}/platform/export compcert.export
+        "\| -R _build/%{context_name}/flocq Flocq
+        "\| -R _build/%{context_name}/MenhirLib MenhirLib
+        ))))
+
+;; --- Binary shorthands ---
+(env
+ ; For all build envs add tools to path -> makes them available for rules / preprocessing.
+ (_ 
+  (binaries tools/ndfun.exe tools/modorder.exe tools/config_to_ml.exe tools/ini_creator.exe tools/config_creator.exe tools/gen_documentation.exe)))
+
+;; --- Dune aliases for common operations ---
+
+; Compile all relevant Coq .v files to .vo files, i.e. run the proofs.
+(alias
+ (name proof)
+ (deps (glob_files_rec platform/*.vo)))
+
+; Extract all relevant Coq .v files into .ml and .mli files, i.e. run the extraction.
+(alias
+ (name extraction)
+ (deps (glob_files_rec extraction/compcert/*.{ml,mli})
+       (glob_files_rec extraction/clightgen/*.{ml,mli})))
+
+; Build a runnable ccomp -> the executable Driver.exe and the needed config file.
+(alias
+ (name ccomp)
+ (deps extraction/compcert/Driver.exe))
+
+; Build a runnable clightgen -> the executable ExportDriver.exe and the needed config file.
+(alias
+ (name clightgen)
+ (deps extraction/clightgen/ExportDriver.exe))
+
+; Check if there are any uses of the admit tactic or Admitted command.
+(rule
+ (alias check-admitted)
+ ; The action runs in the build context, so we declare a dependency on all relevant Coq files to copy the latest state into the _build directory.
+ ; Also declare dependency on (universe) to not cache the result.
+ (deps (universe) (glob_files_rec platform/**.v))
+ (action 
+   (bash "if grep -r -w 'admit\\|Admitted\\|ADMITTED' platform/; then exit 2; else echo \"%{context_name}: Nothing admitted.\"; fi")))
+
+; Check if there are uses of query commands left in source files.
+(rule
+ (alias check-leftovers)
+ ; The action runs in the build context, so we declare a dependency on all relevant Coq files to copy the latest state into the _build directory.
+ ; Also declare dependency on (universe) to not cache the result.
+ (deps (universe) (glob_files_rec platform/**.v))
+ (action
+   (bash "if grep -r -w '^Check\\|^Print\\|^Search' platform/; then exit 2; else echo \"%{context_name}: No leftover interactive commands.\"; fi")))
+
+; Run the coqchk tool.
+; Dune aims to support coqchk in version 1.0 of Coq support, but at the moment we must run it manually.
+;   see https://github.com/ocaml/dune/issues/1998
+; Note: this runs a single command and takes some time. To get continuous output, call `dune build @check-proof --no-buffer`.
+(rule
+ (alias check-proof)
+ (deps (universe) (:incl _CoqProject)
+  (glob_files_rec platform/*.vo))
+ (action
+  ; coqchk needs all the includes but runs inside the _build directory, so we remove the "_build/%{context_name}/" prefix in the _CoqProject file again.
+  (bash "coqchk $(sed 's;_build/%{context_name}/;;' <%{incl} | tr '\n' ' ') compcert.driver.Complements")))
+
+; Print the includes that coqchk and the IDE use.
+(rule
+ (alias print-includes)
+ (deps (universe) (:incl _CoqProject))
+ (action
+  ; The command runs inside the build context, so we remove the "_build/%{context_name}/" prefix in the _CoqProject file again.
+  (bash "sed 's;_build/%{context_name}/;;' <%{incl} | tr '\n' ' '")))

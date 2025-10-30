@@ -1,0 +1,150 @@
+(include ../shared.dune)
+
+; copy OCaml files from source files - only those not shared with compcert already
+; when trying to move extraction file into platform directory
+(copy_files# %{project_root}/platform/export/*.{ml,mli})
+(copy_files# %{project_root}/platform/backend/{Machregsnames.ml,AisAnnot.ml})
+(copy_files  %{project_root}/platform/TargetPlatform/extractionMachdepClight.v)
+(copy_files# %{project_root}/platform/TargetPlatform/{CBuiltins.ml,Machregsaux.ml,Machregsaux.mli})
+(copy_files# %{project_root}/platform/debug/{Debug.{ml,mli},DwarfTypes.mli})
+(copy_files# %{project_root}/platform/driver/{Configuration.{ml,mli},Clflags.ml,CommonOptions.ml,Timing.ml,Driveraux.{ml,mli},Frontend.{ml,mli}})
+(copy_files# %{project_root}/platform/common/{PrintAST.ml,Sections.{ml,mli}})
+
+; generate "new" extractionClight.v to be able to depend on extractionMachdepClight for the extraction
+(rule
+ (deps extractionClight.v extractionMachdepClight.v)
+ (targets extractionClightFull.v)
+ (action (copy extractionClight.v extractionClightFull.v)))
+
+
+; compile library with coq code and all other relevant ml/mli files from source code
+(library
+ (name clightgen)
+ ; no need to prefix imports to allow transition to dune
+ (wrapped false)
+ ; runtime libraries
+ (modules_without_implementation c dwarfTypes)
+ ; ExportDriver is our runner which uses this library, GCC is an unneeded file
+ (modules :standard \ ExportDriver GCC)
+ (instrumentation (backend bisect_ppx))
+ (flags -w -32)
+ (libraries menhirLib str unix))
+
+; generate version.ml
+(rule 
+ (targets version.ml)
+ (deps %{project_root}/VERSION)
+ (action
+  (with-stdout-to %{targets}
+    (chdir %{workspace_root}
+    (run config_to_ml %{deps})))))
+
+
+; generate final clightgen executable
+(executable
+ (name ExportDriver)
+ (modules ExportDriver)
+ ; silence unused-value-declaration for set_all and unset_all
+ (flags -w -32)
+ ; generate both bytecode and exe 
+ (modes byte exe)
+ (instrumentation (backend bisect_ppx))
+ (libraries clightgen))
+
+(include_subdirs no)
+
+
+; Extraction for Clight: Independent of Platform & Backend
+; use all the relevant .v files and extract them to OCaml files
+(coq.extraction 
+ (prelude extractionClightFull)
+ (extracted_modules 
+  Alphabet
+  Archi
+  Ascii
+  AST
+  Automaton
+  Binary
+  BinarySingleNaN
+  BinInt
+  BinNat
+  BinNums
+  BinPos
+  PosDef
+  Bits
+  Bool
+  Builtins0
+  Builtins1
+  Builtins
+  Cabs
+  Cexec
+  Clight
+  Compopts
+  Conventions1
+  Conventions0
+  Cop
+  Coqlib
+  Csem
+  Csyntax
+  Ctypes
+  Ctyping
+  Datatypes
+  DecidableClass
+  Decidableplus
+  Determinism
+  Errors
+  Events
+  Floats
+  FMapAVL
+  FMapList
+  FSetAVL
+  Globalenvs
+  Grammar
+  IEEE754_extra
+  Initializers
+  Int0
+  IntDef
+  Integers
+  Interpreter_complete
+  Interpreter_correct
+  Interpreter
+  List0
+  ListDef
+  Machregs
+  Main
+  Maps
+  Memdata
+  Memory
+  Memtype
+  MSetAVL
+  MSetInterface
+  Nat
+  NatDef
+  Ordered
+  OrderedType
+  OrdersAlt
+  OrdersFacts
+  Orders
+  OrdersTac
+  Parser
+  PeanoNat
+  Round
+  SimplExpr
+  SimplLocals
+  Specif
+  SpecFloat
+  String0
+  Validator_complete
+  Validator_safe
+  Values
+  ZArith_dec
+  Zaux
+  Zbits
+  Znumtheory
+  Zpower)
+ (stdlib yes)
+ (flags
+   -w -change-dir-deprecated
+   -w -extraction-default-directory
+   -w -deprecated-from-Coq)
+ (theories compcert Flocq MenhirLib Stdlib))

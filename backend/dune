@@ -1,0 +1,29 @@
+
+; apply preprocessor to .vp files
+(rule
+ (action 
+  (with-stdout-to SelectDiv.v 
+   (run ndfun %{dep:SelectDiv.vp}))))
+
+(rule
+ (action 
+  (with-stdout-to SplitLong.v 
+   (run ndfun %{dep:SplitLong.vp}))))
+
+;; Copying Asmgenproof0 into Asmgenproof2 as we did for the Makefile build did not work well
+;; for the dune build because the coq.theory stanza in platform/dune just builds every .v file and
+;; we copied all files into the backend subdirectory.
+;; We can either try to filter out the file in the copy_files stanza, or do something like the below
+;; where we dynamically create Asmgenproo0.v based on the architecture. 
+;; TODO test if this negatively affects development (does Coq still want to run on non-.v files?)
+; for all architectures except TriCore we use the generic Asmgenproof0
+(rule
+ (enabled_if (not (= %{env:TARGET_PLATFORM=ppc} tricore)))
+ (action
+  (copy _Asmgenproof0_generic.v Asmgenproof0.v)))
+
+; for TriCore we use the specialized version of Asmgenproof0
+(rule
+ (enabled_if (= %{env:TARGET_PLATFORM=ppc} tricore))
+ (action
+  (copy _Asmgenproof0_tricore.v Asmgenproof0.v)))

@@ -1,0 +1,9 @@
+; a.d. TODO better specification of dependencies.
+; atm if e.g. clightgen was not compiled and the .glob files are missing in the export/ dir, the process fails.
+; documentation generator
+(rule 
+ (targets STAMP (dir html))
+  (deps %{project_root}/extraction/compcert/Driver.exe ccomp.1 index.html style.css)
+  (action (with-stdout-to STAMP
+   (chdir %{workspace_root}
+   (run gen_documentation %{env:TARGET_PLATFORM=ppc})))))

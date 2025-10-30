@@ -1,0 +1,20 @@
+open AST
+
+(* Function to get the target specific register class for AST types.
+   We have two main register classes:
+     0 for integer registers
+     1 for floating-point registers
+   plus a third pseudo-class 2 that has no registers and forces
+   stack allocation. *)
+
+let class_of_type = function
+  | Tint | Tlong -> 0
+  | Tfloat | Tsingle -> 1
+  | Tany32 -> 0
+  | Tany64 -> if Archi.ptr64 then 0 else 1
+
+let class_of_ptype ty = class_of_type (proj_ptype_typ ty)
+
+let interferes_caller_save tv mr = Conventions1.is_caller_save mr
+
+include ArchitectureInterface
