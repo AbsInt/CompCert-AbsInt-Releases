@@ -1,0 +1,13 @@
+(coq.theory
+ (name Flocq)
+ (theories Stdlib)
+ ; can only be addressed upstream
+ (flags 
+  -w -deprecated-syntactic-definition
+  -w -unused-pattern-matching-variable
+  -w -deprecated-since-8.19
+  -w -deprecated-since-8.20
+  -w -deprecated-since-9.0
+  -w -deprecated-from-Coq))
+
+(include_subdirs qualified)

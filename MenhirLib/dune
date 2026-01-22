@@ -1,0 +1,15 @@
+(coq.theory
+ (name MenhirLib)
+ (theories Stdlib)
+ ; can only be addressed upstream
+ (flags
+   -w -unused-pattern-matching-variable
+   -w -deprecated-since-8.19
+   -w -deprecated-since-8.20
+   -w -deprecated-since-9.0
+   -w -deprecated-from-Coq
+   -w -deprecated-syntactic-definition)
+ (modules_flags 
+  (Interpreter (:standard -w -undeclared-scope))))
+
+(include_subdirs qualified)

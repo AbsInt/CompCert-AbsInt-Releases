@@ -1,0 +1,96 @@
+; Selectively compile Coq files based on TARGET_PLATFORM environment variable.
+;
+; We compile all Coq files using the coq.theory stanza of dune, which is very limited in selecting the modules to compile. 
+; One restriction is that we cannot dynamically set which modules to include in the theory, i.e. "everything from common/, backend/ & ppc/ but not arm/".
+; So we resort to collecting the set of modules on the filesystem level and copy the needed directories into the platform/ directory.
+
+; Copy all files from currently selected architecture to "TargetPlatform" directory. 
+; Can't copy processed .vp files from platform directories due to dependency cycle -> generate later in preprocess.dune.
+(subdir TargetPlatform
+ (copy_files  (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} ppc)) (files %{project_root}/powerpc/*.{v,vp}))
+ (copy_files# (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} ppc)) (files %{project_root}/powerpc/*.{ml,mli})))
+
+(subdir TargetPlatform
+ (copy_files  (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} ppc_vle)) (files %{project_root}/powerpc_vle/*.{v,vp}))
+ (copy_files# (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} ppc_vle)) (files %{project_root}/powerpc_vle/*.{ml,mli})))
+
+(subdir TargetPlatform
+ (copy_files  (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} x86_32)) (files %{project_root}/x86/*.{v,vp}))
+ (copy_files# (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} x86_32)) (files %{project_root}/x86/*.{ml,mli})))
+(subdir TargetPlatform 
+ (copy_files  (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} x86_32)) (files %{project_root}/x86_32/*.{v,vp}))
+ (copy_files# (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} x86_32)) (files %{project_root}/x86_32/*.{ml,mli})))
+
+(subdir TargetPlatform
+ (copy_files  (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} x86_64)) (files %{project_root}/x86/*.{v,vp}))
+ (copy_files# (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} x86_64)) (files %{project_root}/x86/*.{ml,mli})))
+(subdir TargetPlatform
+ (copy_files  (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} x86_64)) (files %{project_root}/x86_64/*.{v,vp}))
+ (copy_files# (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} x86_64)) (files %{project_root}/x86_64/*.{ml,mli})))
+
+(subdir TargetPlatform
+ (copy_files  (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} riscV)) (files %{project_root}/riscV/*.{v,vp}))
+ (copy_files# (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} riscV)) (files %{project_root}/riscV/*.{ml,mli})))
+
+(subdir TargetPlatform
+ (copy_files  (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} tricore)) (files %{project_root}/tricore/*.{v,vp}))
+ (copy_files# (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} tricore)) (files %{project_root}/tricore/*.{ml,mli})))
+
+(subdir TargetPlatform
+ (copy_files  (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} arm)) (files %{project_root}/arm/*.{v,vp}))
+ (copy_files# (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} arm)) (files %{project_root}/arm/*.{ml,mli})))
+
+(subdir TargetPlatform
+ (copy_files  (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} aarch64)) (files %{project_root}/aarch64/*.{v,vp}))
+ (copy_files# (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} aarch64)) (files %{project_root}/aarch64/*.{ml,mli})))
+
+(subdir TargetPlatform
+ (copy_files  (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} peaktop)) (files %{project_root}/peaktop/*.{v,vp}))
+ (copy_files# (alias target_platform) (only_sources) (enabled_if (= %{env:TARGET_PLATFORM=ppc} peaktop)) (files %{project_root}/peaktop/*.{ml,mli})))
+
+; Run preprocessing directives on .vp files.
+(include preprocess.dune)
+
+; Copy files from all other relevant source directories
+; We exclude files starting with _ which are _Asmgenproof0_tricore.v & _Asmgenproof0_generic.v. One of then gets copied to Asmgenproof0v before, which is still copied here.
+(subdir backend 
+ (copy_files  (files %{project_root}/backend/[!_]*.{v,vp}))
+ (copy_files# (files %{project_root}/backend/*.{ml,mli})))
+(subdir cfrontend 
+ (copy_files  (files %{project_root}/cfrontend/*.{v,vp}))
+ (copy_files# (files %{project_root}/cfrontend/*.{ml,mli})))
+(subdir common 
+ (copy_files  (files %{project_root}/common/*.{v,vp}))
+ (copy_files# (files %{project_root}/common/*.{ml,mli})))
+(subdir cparser 
+ (copy_files  (files %{project_root}/cparser/*.{v,vp}))
+ (copy_files# (files %{project_root}/cparser/*.{ml,mli})))
+(subdir debug 
+ (copy_files  (files %{project_root}/debug/*.{v,vp}))
+ (copy_files# (files %{project_root}/debug/*.{ml,mli})))
+(subdir driver 
+ (copy_files  (files %{project_root}/driver/*.{v,vp}))
+ (copy_files# (files %{project_root}/driver/*.{ml,mli})))
+(subdir export 
+ (copy_files  (files %{project_root}/export/*.{v,vp}))
+ (copy_files# (files %{project_root}/export/*.{ml,mli})))
+(subdir lib 
+ (copy_files  (files %{project_root}/lib/*.{v,vp}))
+ (copy_files# (files %{project_root}/lib/*.{ml,mli})))
+
+; Compile theory from all Coq files, excluding extraction code that is run directly during compilation.
+(coq.theory
+ (name compcert)
+ (theories Flocq MenhirLib Stdlib)
+ ; temp flag
+ (flags 
+  -w -unused-pattern-matching-variable
+  -w -deprecated-since-8.19
+  -w -deprecated-since-8.20
+  ; FIXME, only needed for lib/IEEE754_extra.v. Use modules_flags when dune 3.21 is available.
+  -w -deprecated-since-9.0
+  -w -deprecated-from-Coq)
+ (modules :standard \ TargetPlatform.extractionMachdep TargetPlatform.extractionMachdepClight))
+
+; Our Coq files are in subdirectories of platform/ so we need this for dune to compile them too.
+(include_subdirs qualified)

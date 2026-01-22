@@ -1,0 +1,576 @@
+(* *********************************************************************)
+(*                                                                     *)
+(*              The Compcert verified compiler                         *)
+(*                                                                     *)
+(*          Xavier Leroy, INRIA Paris-Rocquencourt                     *)
+(*                                                                     *)
+(*  Copyright Institut National de Recherche en Informatique et en     *)
+(*  Automatique.  All rights reserved.  This file is distributed       *)
+(*  under the terms of the INRIA Non-Commercial License Agreement.     *)
+(*                                                                     *)
+(* *********************************************************************)
+
+(** Instruction selection for 64-bit integer operations *)
+
+From Coq Require String.
+Require Import Coqlib.
+Require Import Compopts.
+Require Import AST Integers Floats.
+Require Import Op CminorSel.
+Require Import SelectOp.
+
+Local Open Scope cminorsel_scope.
+Local Open Scope string_scope.
+
+(** Some operations on 64-bit integers are transformed into calls to
+  runtime library functions.  The following type class collects
+  the names of these functions. *)
+
+Class helper_functions := mk_helper_functions {
+  i64_ftos: ident;                      (**r float32 -> signed long *)
+  i64_ftou: ident;                      (**r float32 -> unsigned long *)
+  i64_dtos: ident;                      (**r float64 -> signed long *)
+  i64_dtou: ident;                      (**r float64 -> unsigned long *)
+  i64_stod: ident;                      (**r signed long -> float64 *)
+  i64_utod: ident;                      (**r unsigned long -> float64 *)
+  i64_stof: ident;                      (**r signed long -> float32 *)
+  i64_utof: ident;                      (**r unsigned long -> float32 *)
+  i64_sdiv: ident;                      (**r signed division *)
+  i64_udiv: ident;                      (**r unsigned division *)
+  i64_smod: ident;                      (**r signed remainder *)
+  i64_umod: ident;                      (**r unsigned remainder *)
+  i64_shl: ident;                       (**r shift left *)
+  i64_shr: ident;                       (**r shift right unsigned *)
+  i64_sar: ident;                       (**r shift right signed *)
+  i64_umulh: ident;                     (**r unsigned multiply high *)
+  i64_smulh: ident;                     (**r signed multiply high *)
+}.
+
+Definition sig_l_l := [Xlong ---> Xlong]%asttyp.
+Definition sig_l_f := [Xlong ---> Xfloat]%asttyp.
+Definition sig_l_s := [Xlong ---> Xsingle]%asttyp.
+Definition sig_s_l := [Xsingle ---> Xlong]%asttyp.
+Definition sig_f_l := [Xfloat ---> Xlong]%asttyp.
+Definition sig_ll_l := [Xlong; Xlong ---> Xlong]%asttyp.
+Definition sig_li_l := [Xlong; Xint ---> Xlong]%asttyp.
+Definition sig_ii_l := [Xint; Xint ---> Xlong]%asttyp.
+
+Section SELECT.
+
+Context {hf: helper_functions}.
+
+Definition makelong (h l: expr): expr :=
+  Eop Omakelong (h ::: l ::: Enil).
+
+Nondetfunction splitlong (e: expr) (f: expr -> expr -> expr) :=
+  match e with
+  | Eop Omakelong (h ::: l ::: Enil) => f h l
+  | _ => Elet e (f (Eop Ohighlong (Eletvar O ::: Enil)) (Eop Olowlong (Eletvar O ::: Enil)))
+  end.
+
+Nondetfunction splitlong2 (e1 e2: expr) (f: expr -> expr -> expr -> expr -> expr) :=
+  match e1, e2 with
+  | Eop Omakelong (h1 ::: l1 ::: Enil), Eop Omakelong (h2 ::: l2 ::: Enil) =>
+      f h1 l1 h2 l2
+  | Eop Omakelong (h1 ::: l1 ::: Enil), t2 =>
+      Elet t2 (f (lift h1) (lift l1)
+                 (Eop Ohighlong (Eletvar O ::: Enil)) (Eop Olowlong (Eletvar O ::: Enil)))
+  | t1, Eop Omakelong (h2 ::: l2 ::: Enil) =>
+      Elet t1 (f (Eop Ohighlong (Eletvar O ::: Enil)) (Eop Olowlong (Eletvar O ::: Enil))
+                 (lift h2) (lift l2))
+  | _, _ =>
+      Elet e1 (Elet (lift e2)
+        (f (Eop Ohighlong (Eletvar 1 ::: Enil)) (Eop Olowlong (Eletvar 1 ::: Enil))
+           (Eop Ohighlong (Eletvar O ::: Enil)) (Eop Olowlong (Eletvar O ::: Enil))))
+  end.
+
+Nondetfunction lowlong (e: expr) :=
+  match e with
+  | Eop Omakelong (e1 ::: e2 ::: Enil) => e2
+  | _ => Eop Olowlong (e ::: Enil)
+  end.
+
+Nondetfunction highlong (e: expr) :=
+  match e with
+  | Eop Omakelong (e1 ::: e2 ::: Enil) => e1
+  | _ => Eop Ohighlong (e ::: Enil)
+  end.
+
+Definition longconst (n: int64) : expr :=
+  makelong (Eop (Ointconst (Int64.hiword n)) Enil)
+           (Eop (Ointconst (Int64.loword n)) Enil).
+
+Nondetfunction is_longconst (e: expr) :=
+  match e with
+  | Eop Omakelong (Eop (Ointconst h) Enil ::: Eop (Ointconst l) Enil ::: Enil) =>
+      Some(Int64.ofwords h l)
+  | _ =>
+      None
+  end.
+
+Definition is_longconst_zero (e: expr) :=
+  match is_longconst e with
+  | Some n => Int64.eq n Int64.zero
+  | None => false
+  end.
+
+Definition intoflong (e: expr) := lowlong e.
+
+Nondetfunction longofint (e: expr) :=
+  match e with
+  | Eop (Ointconst n) Enil => longconst (Int64.repr (Int.signed n))
+  | _ => Elet e (makelong (shrimm (Eletvar O) (Int.repr 31)) (Eletvar O))
+  end.
+
+Definition longofintu (e: expr) :=
+  makelong (Eop (Ointconst Int.zero) Enil) e.
+
+Definition negl (e: expr) :=
+  match is_longconst e with
+  | Some n => longconst (Int64.neg n)
+  | None =>
+      match  platform_standard_builtin Builtins0.BI_negl (e ::: Enil) with
+      | Some e => e
+      | None => Ebuiltin (EF_builtin "__builtin_negl" sig_l_l) (e ::: Enil)
+      end
+  end.
+
+Definition notl (e: expr) :=
+  splitlong e (fun h l => makelong (notint h) (notint l)).
+
+Definition andl (e1 e2: expr) :=
+  splitlong2 e1 e2 (fun h1 l1 h2 l2 => makelong (and h1 h2) (and l1 l2)).
+
+Definition orl (e1 e2: expr) :=
+  splitlong2 e1 e2 (fun h1 l1 h2 l2 => makelong (or h1 h2) (or l1 l2)).
+
+Definition xorl (e1 e2: expr) :=
+  splitlong2 e1 e2 (fun h1 l1 h2 l2 => makelong (xor h1 h2) (xor l1 l2)).
+
+Definition select_long (cond: condition) (args: exprlist) (e1 e2: expr) :=
+  if select_supported Tlong then
+    select Tlong cond args e1 e2
+  else
+    bind_exprs (e1 ::: e2 ::: args) (fun al =>
+      match al with
+      | e1 ::: e2 ::: args =>
+          makelong
+            (select Tint cond args (Eop Ohighlong (e1 ::: Enil)) (Eop Ohighlong (e2 ::: Enil)))
+            (select Tint cond args (Eop Olowlong (e1 ::: Enil))  (Eop Olowlong (e2 ::: Enil)))
+
+      | _ => longconst Int64.zero    (*r cannot happen *)
+      end).
+
+Definition select_shift (e1 e2: expr) (base: expr)
+                        (f_low: expr -> expr -> expr -> expr)
+                        (f_high: expr -> expr -> expr -> expr) : expr :=
+  if inlined_runtime tt then
+    let eword := Eop (Ointconst Int.iwordsize) Enil in
+    let ezero := Eop (Ointconst Int.zero) Enil in
+    let e_low := f_low (highlong e1) (lowlong e1) e2 in
+    let e_high := f_high (highlong e1) (lowlong e1) e2 in
+    let sl := select_long (Ccompu Clt) (e2 ::: eword ::: Enil) e_low e_high in
+    select_long (Ccomp Ceq) (e2 ::: ezero ::: Enil) e1 sl
+  else base.
+
+Definition shll_base_small (eh el e2: expr) :=
+   let eword := Eop (Ointconst Int.iwordsize) Enil in
+   makelong (or (shl eh e2) (shru el (sub eword e2))) (shl el e2).
+
+Definition shll_base (e1 e2: expr) : expr :=
+  select_shift e1 e2 (Eexternal  i64_shl sig_li_l (e1 ::: e2 ::: Enil))
+    shll_base_small
+    (fun eh el e2 =>
+      makelong (shl el (addimm (Int.neg Int.iwordsize) e2)) (Eop (Ointconst Int.zero) Enil)).
+
+Definition shllimm (e1: expr) (n: int) :=
+  if Int.eq n Int.zero then e1 else
+  if Int.ltu n Int.iwordsize then
+   splitlong e1 (fun h l =>
+     makelong (or (shlimm h n) (shruimm l (Int.sub Int.iwordsize n)))
+              (shlimm l n))
+  else if Int.ltu n Int64.iwordsize' then
+    makelong (shlimm (lowlong e1) (Int.sub n Int.iwordsize))
+             (Eop (Ointconst Int.zero) Enil)
+  else
+    shll_base e1 (Eop (Ointconst n) Enil).
+
+Definition shrlu_base (e1 e2: expr) :=
+  select_shift e1 e2 (Eexternal i64_shr sig_li_l (e1 ::: e2 ::: Enil))
+    (fun eh el e2 =>
+      let eword := Eop (Ointconst Int.iwordsize)  Enil in
+      makelong (shru eh e2) (or (shru el e2) (shl eh (sub eword e2))))
+    (fun eh el e2 =>
+      makelong (Eop (Ointconst Int.zero) Enil) (shru eh (addimm (Int.neg Int.iwordsize) e2))).
+
+Definition shrluimm (e1: expr) (n: int) :=
+  if Int.eq n Int.zero then e1 else
+  if Int.ltu n Int.iwordsize then
+    splitlong e1 (fun h l =>
+      makelong (shruimm h n)
+               (or (shruimm l n) (shlimm h (Int.sub Int.iwordsize n))))
+  else if Int.ltu n Int64.iwordsize' then
+    makelong (Eop (Ointconst Int.zero) Enil)
+             (shruimm (highlong e1) (Int.sub n Int.iwordsize))
+  else
+    shrlu_base e1 (Eop (Ointconst n) Enil).
+
+Definition shrl_base (e1 e2: expr) :=
+  select_shift e1 e2 (Eexternal i64_sar sig_li_l (e1 ::: e2 ::: Enil))
+    (fun eh el e2 =>
+      let eword := Eop (Ointconst Int.iwordsize) Enil in
+      makelong (shr eh e2) (or (shru el e2) (shl eh (sub eword e2))))
+    (fun eh el e2 =>
+      makelong (shrimm eh (Int.repr 31)) (shr eh (addimm (Int.neg (Int.iwordsize)) e2))).
+
+Definition shrlimm (e1: expr) (n: int) :=
+  if Int.eq n Int.zero then e1 else
+  if Int.ltu n Int.iwordsize then
+    splitlong e1 (fun h l =>
+      makelong (shrimm h n)
+               (or (shruimm l n) (shlimm h (Int.sub Int.iwordsize n))))
+  else if Int.ltu n Int64.iwordsize' then
+    Elet (highlong e1)
+      (makelong (shrimm (Eletvar 0) (Int.repr 31))
+                (shrimm (Eletvar 0) (Int.sub n Int.iwordsize)))
+  else
+    shrl_base e1 (Eop (Ointconst n) Enil).
+
+Definition is_intconst (e: expr) :=
+  match e with
+  | Eop (Ointconst n) Enil => Some n
+  | _ => None
+  end.
+
+Definition shll (e1 e2: expr) :=
+  match is_intconst e2 with
+  | Some n => shllimm e1 n
+  | None => shll_base e1 e2
+  end.
+
+Definition shrlu (e1 e2: expr) :=
+  match is_intconst e2 with
+  | Some n => shrluimm e1 n
+  | None => shrlu_base e1 e2
+  end.
+
+Definition shrl (e1 e2: expr) :=
+  match is_intconst e2 with
+  | Some n => shrlimm e1 n
+  | None => shrl_base e1 e2
+  end.
+
+Definition addl (e1 e2: expr) :=
+  let default := match  platform_standard_builtin Builtins0.BI_addl (e1 ::: e2 ::: Enil) with
+  | Some e => e
+  | None => Ebuiltin (EF_builtin "__builtin_addl" sig_ll_l) (e1 ::: e2 ::: Enil)
+  end in
+  match is_longconst e1, is_longconst e2 with
+  | Some n1, Some n2 => longconst (Int64.add n1 n2)
+  | Some n1, _ => if Int64.eq n1 Int64.zero then e2 else default
+  | _, Some n2 => if Int64.eq n2 Int64.zero then e1 else default
+  | _, _ => default
+  end.
+
+Definition subl (e1 e2: expr) :=
+  let default := match  platform_standard_builtin Builtins0.BI_subl (e1 ::: e2 ::: Enil) with
+  | Some e => e
+  | None => Ebuiltin (EF_builtin "__builtin_subl" sig_ll_l) (e1 ::: e2 ::: Enil)
+  end in
+  match is_longconst e1, is_longconst e2 with
+  | Some n1, Some n2 => longconst (Int64.sub n1 n2)
+  | Some n1, _ => if Int64.eq n1 Int64.zero then negl e2 else default
+  | _, Some n2 => if Int64.eq n2 Int64.zero then e1 else default
+  | _, _ => default
+  end.
+
+Definition mul' (e1 e2: expr) :=
+   match platform_standard_builtin Builtins0.BI_mull (e1 ::: e2 ::: Enil) with
+   | Some e => e
+   | None => makelong (mulhu e1 e2) (mul e1 e2)
+   end.
+
+Definition mull_base (e1 e2: expr) :=
+  splitlong2 e1 e2 (fun h1 l1 h2 l2 =>
+      (makelong
+        (add (add (highlong (mul' l1 l2))
+                  (mul l1 h2))
+             (mul h1 l2))
+        (lowlong (mul' l1 l2)))).
+
+Definition mullimm (n: int64) (e: expr) :=
+  if Int64.eq n Int64.zero then longconst Int64.zero else
+  if Int64.eq n Int64.one then e else
+  match Int64.is_power2' n with
+  | Some l => shllimm e l
+  | None   => mull_base e (longconst n)
+  end.
+
+Definition mull (e1 e2: expr) :=
+  match is_longconst e1, is_longconst e2 with
+  | Some n1, Some n2 => longconst (Int64.mul n1 n2)
+  | Some n1, _ => mullimm n1 e2
+  | _, Some n2 => mullimm n2 e1
+  | _, _ => mull_base e1 e2
+  end.
+
+Definition shrxlimm (e: expr) (n: int) :=
+  if Int.eq n Int.zero then e else
+    Elet e (shrlimm (addl (Eletvar O)
+                          (shrluimm (shrlimm (Eletvar O) (Int.repr 63))
+                                    (Int.sub (Int.repr 64) n)))
+                    n).
+
+Definition neg_cond (e1 e2: expr) :=
+  let mask := makelong (shrimm (highlong e1) (Int.repr 31)) (shrimm (highlong e1) (Int.repr 31)) in
+  subl (xorl e2 mask) mask.
+
+Definition divlu_base (e1 e2: expr) :=
+  match platform_standard_builtin Builtins0.BI_i64_udiv (e1 ::: e2 ::: Enil) with
+  | Some e => e
+  | None => Eexternal i64_udiv sig_ll_l (e1 ::: e2 ::: Enil)
+  end.
+Definition modlu_base (e1 e2: expr) :=
+  if inlined_runtime tt && (negb Archi.ptr64) then
+    Elet e1
+    (Elet (lift e2)
+      (subl (Eletvar 1) (mull (divlu_base (Eletvar 1) (Eletvar 0)) (Eletvar 0))))
+  else
+    Eexternal i64_umod sig_ll_l (e1 ::: e2 ::: Enil).
+Definition divls_base (e1 e2: expr) :=
+  if inlined_runtime tt && (negb Archi.ptr64) then
+     let e1' := neg_cond e1 e1 in
+     let e2' := neg_cond e2 e2 in
+     let cond := xorl e1 e2 in
+     neg_cond cond (divlu_base e1' e2')
+  else
+     Eexternal i64_sdiv sig_ll_l (e1 ::: e2 ::: Enil).
+Definition modls_base (e1 e2: expr) :=
+  if inlined_runtime tt && (negb Archi.ptr64) then
+     let e1' := neg_cond e1 e1 in
+     let e2' := neg_cond e2 e2 in
+     neg_cond e1 (modlu_base e1' e2')
+  else
+     Eexternal i64_smod sig_ll_l (e1 ::: e2 ::: Enil).
+
+
+Definition exponentofbits (arg: expr) := 
+  (* remove bias of (1023 + 52 ) *)
+  sub 
+    (* shift right by 52 + 1 (since we shifted right) - 32 (since this just the high word) *)
+    (shru 
+      (* shift left 1 to get rid of sign bit *) 
+      (shl arg (Eop (Ointconst Int.one) Enil))
+      (Eop (Ointconst (Int.repr 21%Z)) Enil))
+    (Eop (Ointconst (Int.repr 1075%Z)) Enil).
+
+Definition mantissaofbits (arg: expr) :=
+  Elet arg 
+  (makelong 
+            (* adding the implicit highest bit *)
+            (or 
+                (* masking out the exponent and sign bit *)
+                (and (highlong (Eletvar 0))
+                     (Eop (Ointconst (Int.repr (two_p 20 - 1))) Enil))
+                (Eop (Ointconst (Int.repr (two_p 20))) Enil))
+            (* the low half completely belongs to the mantissa *)
+            (lowlong (Eletvar 0))).
+
+Definition signofbits (arg: expr) :=
+  shru arg (Eop (Ointconst (Int.repr 31%Z)) Enil).
+
+Definition shift_mantissa (m e: expr) :=
+   (Econdition
+      (CEcond (Ccomp Cgt) (e ::: (Eop (Ointconst Int.zero) Enil) ::: Enil))
+      (shll_base_small (highlong m) (lowlong m) e)
+      (shrlu m (negint e))).
+
+Definition dtob (arg: expr) :=
+ match platform_standard_builtin Builtins0.BI_dtob (arg ::: Enil) with
+ | Some e => e
+ | None => Ebuiltin (EF_builtin "__builtin_dtob" sig_f_l) (arg ::: Enil)
+ end.
+
+Definition longoffloat (arg: expr) :=
+  if inlined_runtime tt && negb Archi.ptr64 then
+                                           (* all bits of float *)
+    Elet (dtob arg)
+    (Elet (highlong (Eletvar 0))           (* high bits containing exponent *)
+    (Elet (exponentofbits (Eletvar 0))     (* only the exponent *)
+    (Econdition                            (* if (exponent < -52) *)
+                                           (* then return 0 *)
+      (CEcond (Ccomp Clt) (Eletvar 0 ::: (Eop (Ointconst (Int.repr (-52%Z))) Enil) ::: Enil))
+      (longconst Int64.zero)
+                                           
+      (Elet (signofbits (Eletvar 1))       (* extract sign bit *)
+      (Econdition                          (* else if (exponent >= 11) *)
+        (CEcond (Ccomp Cge) (Eletvar 1 ::: (Eop (Ointconst (Int.repr 11%Z)) Enil) ::: Enil))
+                                           (*      then check sign and return Int64.min_signed/max_signed *)
+        (Econdition 
+          (CEcond (Ccomp Ceq) (Eletvar 0 ::: (Eop (Ointconst Int.one) Enil) ::: Enil))
+          (longconst (Int64.repr Int64.min_signed))
+          (longconst (Int64.repr Int64.max_signed)))
+        (Elet (mantissaofbits (Eletvar 3)) (*      else extract true mantissa *)
+                                           (*      and shift according to exponent *)
+        (Elet (shift_mantissa (Eletvar 0) (Eletvar 2))
+        (Econdition                        (*      negate if sign bit is 1 *)
+          (CEcond (Ccomp Ceq) (Eletvar 2 ::: (Eop (Ointconst Int.one) Enil) ::: Enil))
+          (negl (Eletvar 0))
+          (Eletvar 0))
+        )))
+    ))))
+  else
+    Eexternal i64_dtos sig_f_l (arg ::: Enil).
+
+Definition longuoffloat (arg: expr) :=
+  if inlined_runtime tt && negb Archi.ptr64 then
+    Elet arg
+    (Elet (Eop (Ofloatconst (Float.of_longu Float.ox8000_0000_0000_0000)) Enil)
+      (Econdition (CEcond (Ccompf Clt) (Eletvar 1 ::: Eletvar 0 ::: Enil))
+        (longoffloat (Eletvar 1))
+        (addl (longconst Float.ox8000_0000_0000_0000) (longoffloat (subf (Eletvar 1) (Eletvar 0))))))
+  else
+    Eexternal i64_dtou sig_f_l (arg ::: Enil).
+Definition floatoflong (arg: expr) :=
+  if inlined_runtime tt then
+    let two_pf := Eop (Ofloatconst (IEEE754_extra.BofZ 53 1024 eq_refl eq_refl (2 ^ 32))) Enil in
+    addf (mulf (floatofint (highlong arg)) (two_pf)) (floatofintu (lowlong arg))
+  else
+    Eexternal i64_stod sig_l_f (arg ::: Enil).
+Definition floatoflongu (arg: expr) :=
+  if inlined_runtime tt then
+    let two_pf := Eop (Ofloatconst (IEEE754_extra.BofZ 53 1024 eq_refl eq_refl (2 ^ 32))) Enil in
+    addf (mulf (floatofintu (highlong arg)) (two_pf)) (floatofintu (lowlong arg))
+  else
+    Eexternal i64_utod sig_l_f (arg ::: Enil).
+Definition longofsingle (arg: expr) :=
+  if supports_double then
+    longoffloat (floatofsingle arg)
+  else
+    Eexternal i64_ftos sig_s_l (arg ::: Enil).
+Definition longuofsingle (arg: expr) :=
+  if supports_double then
+    longuoffloat (floatofsingle arg)
+  else
+    Eexternal i64_ftou sig_s_l (arg ::: Enil).
+
+Definition cmpl_eq_zero (e: expr) :=
+  splitlong e (fun h l => comp Ceq (or h l) (Eop (Ointconst Int.zero) Enil)).
+
+Definition cmpl_ne_zero (e: expr) :=
+  splitlong e (fun h l => comp Cne (or h l) (Eop (Ointconst Int.zero) Enil)).
+
+Definition cmplu_gen (ch cl: comparison) (e1 e2: expr) :=
+  splitlong2 e1 e2 (fun h1 l1 h2 l2 =>
+    Econdition (CEcond (Ccomp Ceq) (h1:::h2:::Enil))
+               (Eop (Ocmp (Ccompu cl)) (l1:::l2:::Enil))
+               (Eop (Ocmp (Ccompu ch)) (h1:::h2:::Enil))).
+
+Definition cmplu (c: comparison) (e1 e2: expr) :=
+  match c with
+  | Ceq =>
+      cmpl_eq_zero (xorl e1 e2)
+  | Cne =>
+      cmpl_ne_zero (xorl e1 e2)
+  | Clt =>
+      cmplu_gen Clt Clt e1 e2
+  | Cle =>
+      cmplu_gen Clt Cle e1 e2
+  | Cgt =>
+      cmplu_gen Cgt Cgt e1 e2
+  | Cge =>
+      cmplu_gen Cgt Cge e1 e2
+  end.
+
+Definition cmpl_gen (ch cl: comparison) (e1 e2: expr) :=
+  splitlong2 e1 e2 (fun h1 l1 h2 l2 =>
+    Econdition (CEcond (Ccomp Ceq) (h1:::h2:::Enil))
+               (Eop (Ocmp (Ccompu cl)) (l1:::l2:::Enil))
+               (Eop (Ocmp (Ccomp ch)) (h1:::h2:::Enil))).
+
+Definition cmpl (c: comparison) (e1 e2: expr) :=
+  match c with
+  | Ceq =>
+      cmpl_eq_zero (xorl e1 e2)
+(*
+        (if is_longconst_zero e2 then e1
+         else if is_longconst_zero e1 then e2
+         else xorl e1 e2) *)
+  | Cne =>
+      cmpl_ne_zero (xorl e1 e2)
+(*        (if is_longconst_zero e2 then e1
+         else if is_longconst_zero e1 then e2
+         else xorl e1 e2) *)
+  | Clt =>
+      if is_longconst_zero e2
+      then comp Clt (highlong e1) (Eop (Ointconst Int.zero) Enil)
+      else cmpl_gen Clt Clt e1 e2
+  | Cle =>
+      cmpl_gen Clt Cle e1 e2
+  | Cgt =>
+      cmpl_gen Cgt Cgt e1 e2
+  | Cge =>
+      if is_longconst_zero e2
+      then comp Cge (highlong e1) (Eop (Ointconst Int.zero) Enil)
+      else cmpl_gen Cgt Cge e1 e2
+  end.
+
+Definition long_round_odd (arg: expr) :=
+  let k1 := andl arg (longconst (Int64.repr 2047)) in
+  let k2 := addl k1 (longconst (Int64.repr 2047)) in
+  let k3 := orl arg k2 in
+  andl k3 (longconst (Int64.repr (-2048))).
+
+Definition singleoflongu (arg: expr) :=
+  if negb (Archi.ptr64) && inlined_runtime tt && supports_double then
+     let arg_large := long_round_odd arg in
+     let cmp_arg := cmplu Cle arg (longconst (Int64.repr 9007199254740992)) in
+     let arg' := Econdition (CEcond (Ccomp Ceq) (cmp_arg ::: (Eop (Ointconst Int.zero) Enil) ::: Enil)) arg_large arg in
+     singleoffloat (floatoflongu arg')
+  else
+    Eexternal i64_utof sig_l_s (arg ::: Enil).
+
+Definition singleoflong (arg: expr) :=
+  if negb (Archi.ptr64) && inlined_runtime tt && supports_double then
+     let arg_large := long_round_odd arg in
+     let cmpl1 := cmpl Clt arg (longconst (Int64.repr (- 9007199254740992))) in
+     let cmpl2 := cmpl Cge arg (longconst (Int64.repr 9007199254740992)) in
+     let cmp_arg := or cmpl1 cmpl2 in
+     let arg' := Econdition (CEcond (Ccomp Ceq) (cmp_arg ::: (Eop (Ointconst Int.zero) Enil) ::: Enil)) arg arg_large in
+     singleoffloat (floatoflong arg')
+  else
+    Eexternal i64_stof sig_l_s (arg ::: Enil).
+
+Definition mullhu (e1: expr) (n2: int64) :=
+  if inlined_runtime tt && (negb Archi.ptr64) then
+    let ezero := Eop (Ointconst Int.zero) Enil in
+    let xl := lowlong e1 in
+    let xh := highlong e1 in
+    let yl := Int64.loword n2 in
+    let yh := Int64.hiword n2 in
+    let xlyl := mulhu xl (Eop (Ointconst yl) Enil) in
+    let xhyl_l := mulimm yl xh in
+    let xlyh_l := mulimm yh xl in
+    let xhyl_h := mulhu xh (Eop (Ointconst yl) Enil) in
+    let xlyh_h := mulhu xl (Eop (Ointconst yh) Enil) in
+    let k1 := makelong ezero xlyl in
+    let k2 := addl (makelong ezero xhyl_l) (makelong ezero xlyh_l) in
+    let k3 := addl (makelong ezero xhyl_h) (makelong ezero xlyh_h) in
+    let k4 := mul' xh (Eop (Ointconst yh) Enil) in
+    addl k4 (addl k3 (shrluimm (addl k2 k1) (Int.repr 32)))
+  else
+    Eexternal i64_umulh sig_ll_l (e1 ::: longconst n2 ::: Enil).
+
+
+Definition mullhs (e1: expr) (n2: int64) :=
+  if inlined_runtime tt && (negb Archi.ptr64) then
+    let m := mullhu e1 n2 in
+    let mask := makelong (shrimm (highlong e1) (Int.repr 31)) (shrimm (highlong e1) (Int.repr 31)) in
+    let m1 := subl m (andl mask (longconst n2)) in
+    if Int64.lt n2 Int64.zero then
+       subl m1 e1
+    else m1
+  else
+    Eexternal i64_smulh sig_ll_l (e1 ::: longconst n2 ::: Enil).
+
+End SELECT.

@@ -1,0 +1,48 @@
+(*- E_COMPCERT_DEACTIVATED_CODE_config_to_ml_001 *)
+(*- #Condition "Code is not compiled into CompCert." *)
+(*- #Justification "Code is not part of CompCert" *)
+
+(*- E_COMPCERT_CODE_config_to_ml_001 *)
+(*- #Justify_Derived "Module config_to_ml.ml is an external helper tool. It is part of the build system and is not part of CompCert." *)
+
+open Printf
+
+(* Module to parse config file to output in ocaml format *)
+
+let translate_file f = 
+  let ic = open_in f in 
+  try 
+    while true do 
+      let l = input_line ic in 
+      (* allow for empty lines and comments *)
+      if not (l = "" || String.starts_with ~prefix:"#" l) then begin 
+        let r = Str.regexp {|\([^=]*\)=\(.*\)|} in 
+        (* line does not match *)
+        if not (Str.string_match r l 0) then 
+          (* insert line as comment *)
+          printf "(* %s *)\n" l 
+        else 
+          (* identifier must be "clean" identifier according to variable identifier definition *)
+          let identifier = String.lowercase_ascii (Str.matched_group 1 l) in
+          let value = Str.matched_group 2 l in 
+          let value_escaped = value
+            (* Double quotes must be escaped because we are placing the value into a string. *)
+            |> Str.global_replace (Str.regexp {|"|}) {|\\"|}
+            (* a.d. TODO emulate other replacements such as $(PREFIX) that were done implicitly when including Makefile.config *)
+          in
+          printf "let %s = \"%s\"\n" identifier value_escaped
+      end
+    done
+  with End_of_file -> 
+    close_in ic
+
+(* Entrypoint -> read first arg of input, should be Config Format (VERSION, Makefile.config,...) file *)
+let _ = 
+  if Array.length Sys.argv = 2 then 
+    translate_file Sys.argv.(1)
+  else 
+    invalid_arg "expected only one file name argument"
+
+(*- #End *)
+
+(*- #End_DEACTIVATED_CODE *)
