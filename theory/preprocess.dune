@@ -1,0 +1,15 @@
+; Process the .vp files.
+(rule
+ (target SelectOp.v) (deps SelectOp.vp)
+ (action 
+  (with-stdout-to %{target} (run ndfun %{deps}))))
+
+(rule
+ (target SelectLong.v) (deps SelectLong.vp)
+ (action 
+  (with-stdout-to %{target} (run ndfun %{deps}))))
+
+(rule
+ (target ConstpropOp.v) (deps ConstpropOp.vp)
+ (action 
+  (with-stdout-to %{target} (run ndfun %{deps}))))

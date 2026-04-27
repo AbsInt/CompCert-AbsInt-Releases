@@ -1,0 +1,41 @@
+; Selectively compile Coq files based on TARGET_ARCH environment variable.
+;
+; We compile all Coq files using the coq.theory stanza of dune, which is very limited in selecting the modules to compile. 
+; One restriction is that we cannot dynamically set which modules to include in the theory, i.e. "everything from common/, backend/ & powerpc/ but not arm/".
+; So we resort to collecting the set of modules on the filesystem level and copy the needed directories into the theory/ directory.
+
+; Copy architecture-specific Coq files.
+(subdir TargetArch 
+ (copy_files (files %{project_root}/%{env:TARGET_ARCH=powerpc}/*.{v,vp}))
+ ; Preprocessing is done in a separate file so that it can be replaced with an empty file when only compiling clightgen.
+ (include ../preprocess.dune))
+
+; Copy files from all other relevant source directories.
+; We exclude files starting with _ which are _Asmgenproof0_tricore.v & _Asmgenproof0_generic.v. One of then gets copied to Asmgenproof0.v before, which is still copied here.
+(subdir backend (copy_files (files %{project_root}/backend/[!_]*.v)))
+(subdir cfrontend (copy_files (files %{project_root}/cfrontend/*.v)))
+(subdir common (copy_files (files %{project_root}/common/*.v)))
+(subdir cparser (copy_files (files %{project_root}/cparser/*.v)))
+(subdir driver (copy_files (files %{project_root}/driver/*.v)))
+(subdir export (copy_files (files %{project_root}/export/*.v)))
+(subdir lib (copy_files (files %{project_root}/lib/*.v)))
+
+; Compile theory from all Coq files, excluding extraction code that is run directly during compilation.
+(coq.theory
+ (name compcert)
+ (theories Flocq MenhirLib Stdlib)
+ ; Disable same warnings as in Makefile.
+ (flags
+  (:include %{project_root}/dune-include/coqcopts.sexp)
+  ; FIXME, only needed for lib/IEEE754_extra.v. Use modules_flags when dune 3.21 is available.
+  -w -deprecated-since-9.0)
+ ; Notes on silenced Coq warnings:
+ ; deprecated-instance-without-locality:
+ ;    warning introduced in 8.14
+ ;    triggered by Menhir-generated files, to be solved upstream in Menhir
+ (modules_flags
+  (Parser (:standard -w -deprecated-instance-without-locality)))
+ (modules :standard \ TargetArch.extractionMachdep TargetArch.extractionMachdepClight))
+
+; Our Coq files are in subdirectories of theory/ so we need this for dune to compile them too.
+(include_subdirs qualified)

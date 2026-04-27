@@ -1,0 +1,30 @@
+(* *********************************************************************)
+(*                                                                     *)
+(*              The Compcert verified compiler                         *)
+(*                                                                     *)
+(*          Xavier Leroy, INRIA Paris-Rocquencourt                     *)
+(*                                                                     *)
+(*  Copyright Institut National de Recherche en Informatique et en     *)
+(*  Automatique.  All rights reserved.  This file is distributed       *)
+(*  under the terms of the GNU Lesser General Public License as        *)
+(*  published by the Free Software Foundation, either version 2.1 of   *)
+(*  the License, or  (at your option) any later version.               *)
+(*  This file is also distributed under the terms of the               *)
+(*  INRIA Non-Commercial License Agreement.                            *)
+(*                                                                     *)
+(* *********************************************************************)
+
+(* Additional extraction directives specific to the RISC-V port *)
+
+From compcert Require SelectOp Asm.
+
+(* SelectOp *)
+
+Extract Constant SelectOp.symbol_is_relocatable => "C2C.atom_needs_GOT_access".
+
+(* Asm *)
+
+Extract Constant Asm.low_half => "fun _ _ _ -> assert false".
+Extract Constant Asm.high_half => "fun _ _ _ -> assert false".
+
+Load extractionMachdepClight.

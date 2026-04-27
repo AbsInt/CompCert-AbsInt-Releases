@@ -1,0 +1,2 @@
+; The x86_32 and x86_64 architecture targets share all the files from the x86/ directory.
+(copy_files %{project_root}/x86/*)

@@ -1,0 +1,10 @@
+(rule 
+ (alias documentation)
+ ; Limitation in dune directory target, we need to output to a STAMP file so that it correctly triggers the rule.
+ (targets STAMP (dir html))
+ ; NB: this also includes cparser/Parser.v but it gets filtered out in gen_documentation.ml.
+ (deps (:files (glob_files_rec ../theory/*.{glob,v})) ccomp.1 index.html style.css)
+   (action (progn
+    (system "mkdir html")
+    (chdir ../theory (run gen_documentation %{files}))
+    (write-file STAMP ""))))

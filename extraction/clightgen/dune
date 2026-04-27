@@ -1,0 +1,153 @@
+; Copy architecture-specific OCaml files.
+(copy_files %{project_root}/%{env:TARGET_ARCH=powerpc}/{CBuiltins.ml,Machregsaux.ml,Machregsaux.mli})
+; Copy architecture-specific dependencies of the extraction module.
+(copy_files %{project_root}/%{env:TARGET_ARCH=powerpc}/{extractionMachdepClight.v})
+
+; Copy common OCaml files.
+(copy_files %{project_root}/backend/{Machregsnames.ml,AisAnnot.ml})
+(copy_files %{project_root}/cfrontend/*.{ml,mli})
+(copy_files %{project_root}/common/{PrintAST.ml,Sections.{ml,mli}})
+(copy_files %{project_root}/cparser/*.{ml,mli})
+(copy_files %{project_root}/debug/{Debug.{ml,mli},DwarfTypes.mli})
+(copy_files %{project_root}/driver/{Configuration.{ml,mli},Clflags.ml,CommonOptions.ml,Timing.ml,Driveraux.{ml,mli},Frontend.{ml,mli}})
+(copy_files %{project_root}/export/*.{ml,mli})
+(copy_files %{project_root}/lib/*.{ml,mli})
+
+; Generate "new" extractionClight.v to create an explicit dependency on extractionMachdepClight.v.
+; If we use extractionClight.v directly, coqdep fails to find the machdep files as dependencies
+;  so they are not copied here and consequently not found on the loadpath.
+; Manually adding them to the loadpath in the coq.extraction stanza's flags field works for running the extraction,
+;  but since there is no dependency the extraction is not rerun if the files change.
+(rule
+ (deps ../extractionClight.v extractionMachdepClight.v)
+ (targets extractionClight.v)
+ (action (copy ../extractionClight.v extractionClight.v)))
+
+; Compile library with coq code and all other relevant ml/mli files from source code.
+(library
+ (name clightgen)
+ ; No need to prefix imports to allow transition to dune.
+ (wrapped false)
+ ; Runtime libraries
+ (modules_without_implementation c dwarfTypes)
+ ; ExportDriver is our runner which uses this library, GCC is an unneeded file.
+ (modules :standard \ ExportDriver GCC)
+ (instrumentation (backend bisect_ppx))
+ (flags (:include %{project_root}/dune-include/ocaml-flags.sexp))
+ (libraries menhirLib str unix))
+
+; Generate version.ml.
+(rule 
+ (target version.ml)
+ (deps %{project_root}/VERSION)
+ (action
+  (with-stdout-to %{target}
+   (chdir %{workspace_root}
+   (run version_creator)))))
+
+; Generate final clightgen executable.
+(executable
+ (name ExportDriver)
+ (modules ExportDriver)
+ (flags (:include %{project_root}/dune-include/ocaml-flags.sexp))
+ ; Generate both bytecode and native code.
+ (modes byte exe)
+ (instrumentation (backend bisect_ppx))
+ (libraries clightgen))
+
+; Extraction for Clight: Independent of architecture & backend
+; use all the relevant .v files and extract them to OCaml files.
+(coq.extraction 
+ (prelude extractionClight)
+ (extracted_modules 
+  Alphabet
+  Archi
+  Ascii
+  AST
+  Automaton
+  Binary
+  BinarySingleNaN
+  BinInt
+  BinNat
+  BinNums
+  BinPos
+  PosDef
+  Bits
+  Bool
+  Builtins0
+  Builtins1
+  Builtins
+  Cabs
+  Cexec
+  Clight
+  Compopts
+  Conventions1
+  Conventions0
+  Cop
+  Coqlib
+  Csem
+  Csyntax
+  Ctypes
+  Ctyping
+  Datatypes
+  DecidableClass
+  Decidableplus
+  Determinism
+  Errors
+  Events
+  Floats
+  FMapAVL
+  FMapList
+  FSetAVL
+  Globalenvs
+  Grammar
+  IEEE754_extra
+  Initializers
+  Int0
+  IntDef
+  Integers
+  Interpreter_complete
+  Interpreter_correct
+  Interpreter
+  List0
+  ListDef
+  Machregs
+  Main
+  Maps
+  Memdata
+  Memory
+  Memtype
+  MSetAVL
+  MSetInterface
+  Nat
+  NatDef
+  Ordered
+  OrderedType
+  OrdersAlt
+  OrdersFacts
+  Orders
+  OrdersTac
+  Parser
+  PeanoNat
+  Round
+  SimplExpr
+  SimplLocals
+  Specif
+  SpecFloat
+  String0
+  Validator_complete
+  Validator_safe
+  Values
+  ZArith_dec
+  Zaux
+  Zbits
+  Znumtheory
+  Zpower)
+ (stdlib yes)
+ (flags (:include %{project_root}/dune-include/coqextractopts.sexp))
+ (theories compcert Flocq MenhirLib Stdlib))
+
+; Alias to trigger just the extraction.
+(alias
+ (name extraction)
+ (deps (glob_files *.ml)))

@@ -1,0 +1,69 @@
+(lang dune 3.17)
+
+; Set default verbosity to show executed commands.
+(display short)
+
+; Defines different "contexts" - allows us to build for all architectures at the same time
+; by overwriting the environment variable TARGET_ARCH.
+;
+; This environment variable is then used to decide which architecture code directories are used
+; during compilation. 
+; The TARGET_ARCH variable is by default set to "powerpc".
+
+(context default)
+
+(context (default 
+ (name aarch64)
+ (env 
+  (_ 
+   (env-vars 
+    (TARGET_ARCH aarch64))))))
+
+(context (default 
+ (name arm)
+ (env 
+  (_ 
+   (env-vars 
+    (TARGET_ARCH arm))))))
+
+(context (default 
+ (name powerpc)
+ (env
+  (_ 
+   (env-vars 
+    (TARGET_ARCH powerpc))))))
+
+(context (default 
+ (name powerpc_vle)
+ (env 
+  (_ 
+   (env-vars 
+    (TARGET_ARCH powerpc_vle))))))
+
+(context (default 
+ (name riscV)
+ (env 
+  (_ 
+   (env-vars 
+    (TARGET_ARCH riscV))))))
+
+(context (default 
+ (name tricore)
+ (env 
+  (_ 
+   (env-vars 
+    (TARGET_ARCH tricore))))))
+
+(context (default 
+ (name x86_32)
+ (env 
+  (_ 
+   (env-vars 
+    (TARGET_ARCH x86_32))))))
+
+(context (default 
+ (name x86_64)
+ (env 
+  (_ 
+   (env-vars 
+    (TARGET_ARCH x86_64))))))

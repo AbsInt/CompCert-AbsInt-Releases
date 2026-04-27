@@ -1,0 +1,16 @@
+(coq.theory
+ (name MenhirLib)
+ (theories Stdlib)
+ ; Disable same warnings as in Makefile.
+ (flags 
+  (:include %{project_root}/dune-include/coqcopts.sexp)
+  -w -deprecated-syntactic-definition
+  -w -deprecated-since-9.0)
+ ; Notes on silenced Coq warnings:
+ ; undeclared-scope:
+ ;    warning introduced in 8.12, addressed in the main CompCert files
+ ;    triggered by MenhirLib, to be solved upstream
+ (modules_flags 
+  (Interpreter (:standard -w -undeclared-scope))))
+
+(include_subdirs qualified)

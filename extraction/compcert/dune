@@ -1,0 +1,64 @@
+; Copy architecture-specific OCaml files.
+(copy_files %{project_root}/%{env:TARGET_ARCH=powerpc}/*.{ml,mli})
+; Copy architecture-specific dependencies of the extraction module.
+(copy_files %{project_root}/%{env:TARGET_ARCH=powerpc}/{extractionMachdep.v,extractionMachdepClight.v})
+
+; Copy common OCaml files.
+(copy_files %{project_root}/backend/*.{ml,mli})
+(copy_files %{project_root}/cfrontend/*.{ml,mli})
+(copy_files %{project_root}/common/*.{ml,mli})
+(copy_files %{project_root}/cparser/*.{ml,mli})
+(copy_files %{project_root}/debug/*.{ml,mli})
+(copy_files %{project_root}/driver/*.{ml,mli})
+(copy_files %{project_root}/lib/*.{ml,mli})
+
+
+; Generate "new" extraction.v to create an explicit dependency on extractionMachdep(Clight).v.
+; If we use extraction.v directly, coqdep fails to find the machdep files as dependencies
+;  so they are not copied here and consequently not found on the loadpath.
+; Manually adding them to the loadpath in the coq.extraction stanza's flags field works for running the extraction,
+;  but since there is no dependency the extraction is not rerun if the files change.
+(rule
+ (deps ../extraction.v extractionMachdep.v extractionMachdepClight.v)
+ (targets extraction.v)
+ (action (copy ../extraction.v extraction.v)))
+
+; Compile library with coq code and all relevant ml/mli files.
+(library
+ (name compcert)
+ ; No need to prefix imports to allow transition to dune.
+ (wrapped false)
+ ; Runtime libraries
+ (modules_without_implementation c debugTypes dwarfTypes)
+ ; Driver is our runner which uses this library, GCC is unneeded file.
+ (modules :standard \ Driver GCC)
+ (flags (:include %{project_root}/dune-include/ocaml-flags.sexp))
+ (instrumentation (backend bisect_ppx))
+ (libraries menhirLib str unix))
+
+; Generate version.ml.
+(rule 
+ (target version.ml)
+ (deps %{project_root}/VERSION)
+ (action
+  (with-stdout-to %{target}
+   (chdir %{workspace_root}
+   (run version_creator)))))
+
+; Generate final compcert executable.
+(executable
+ (name Driver)
+ (modules Driver)
+ (flags (:include %{project_root}/dune-include/ocaml-flags.sexp))
+ ; Generate both bytecode and native code.
+ (modes byte exe)
+ (instrumentation (backend bisect_ppx))
+ (libraries compcert))
+
+; Import dynamically created dune.inc that constains (coq.extraction) stanza.
+(dynamic_include ../arch-modules/dune.inc)
+
+; Alias to trigger just the extraction.
+(alias
+ (name extraction)
+ (deps (glob_files *.ml)))
