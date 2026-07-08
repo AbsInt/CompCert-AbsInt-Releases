@@ -1,0 +1,45 @@
+; Generate dune.inc depending on the architecture.
+; dune.inc will contain one (coq.extraction) stanza that specifies the Coq modules to extract for this architecture.
+;
+; In the future, dune plans to implement a better way to customize values of the ordered-set language.
+; FIXME: Use that feature when it is implemented.
+
+; tricore
+(rule
+ (action (copy tricore.dune dune.inc))
+ (enabled_if (= %{env:TARGET_ARCH=undefined} tricore)))
+
+; riscV
+(rule
+ (action (copy riscV.dune dune.inc))
+ (enabled_if (= %{env:TARGET_ARCH=undefined} riscV)))
+
+; ppc_vle
+(rule
+ (action (copy ppc_vle.dune dune.inc))
+ (enabled_if (= %{env:TARGET_ARCH=undefined} powerpc_vle)))
+
+; arm
+(rule
+ (action (copy arm.dune dune.inc))
+ (enabled_if (= %{env:TARGET_ARCH=undefined} arm)))
+
+; aarch64
+(rule
+ (action (copy aarch64.dune dune.inc))
+ (enabled_if (= %{env:TARGET_ARCH=undefined} aarch64)))
+
+; default, every other case is already specified
+(rule
+ (action (copy default.dune dune.inc))
+ (enabled_if
+  (not
+   (or
+    (= %{env:TARGET_ARCH=undefined} aarch64)
+    (or
+     (= %{env:TARGET_ARCH=undefined} arm)
+     (or
+      (= %{env:TARGET_ARCH=undefined} powerpc_vle)
+      (or
+       (= %{env:TARGET_ARCH=undefined} tricore)
+       (= %{env:TARGET_ARCH=undefined} riscV))))))))

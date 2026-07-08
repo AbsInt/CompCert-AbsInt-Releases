@@ -1,0 +1,54 @@
+; Processor for .vp files
+(executable
+ (name ndfun)
+ (modules ndfun)
+ (flags)
+ (libraries str))
+
+; Link-order generator
+(executable
+ (name modorder)
+ (modules modorder)
+ (flags)
+ (libraries str))
+
+;; Config file generators
+; creates compcert.ini
+(executable
+ (name ini_creator)
+ (enabled_if (= "default" %{context_name}))
+ (modules ini_creator kv_parser)
+ (flags (:include tool-flags.sexp))
+ (libraries str))
+
+; creates compcert.config
+(executable
+ (name config_creator)
+ (enabled_if (= "default" %{context_name}))
+ (modules config_creator kv_parser)
+ (flags (:include tool-flags.sexp))
+ (libraries str))
+
+; creates Version.ml
+(executable
+ (name version_creator)
+ (modules version_creator kv_parser)
+ (flags (:include tool-flags.sexp))
+ (libraries str))
+
+; Documentation generator
+(executable
+ (name gen_documentation)
+ (modules gen_documentation)
+ (flags (:include tool-flags.sexp))
+ (libraries str))
+
+; configure script
+(executable
+ (name configure)
+ (enabled_if (= "default" %{context_name}))
+ (modules configure util)
+ (flags (:include tool-flags.sexp))
+ (libraries str))
+
+(include_subdirs no)

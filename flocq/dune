@@ -1,0 +1,10 @@
+(coq.theory
+ (name Flocq)
+ (theories Stdlib)
+ ; Disable same warnings as in Makefile.
+ (flags 
+  (:include %{project_root}/dune-include/coqcopts.sexp)
+  -w -deprecated-syntactic-definition
+  -w -deprecated-since-9.0))
+
+(include_subdirs qualified)

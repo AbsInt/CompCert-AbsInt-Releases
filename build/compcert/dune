@@ -1,0 +1,45 @@
+; Copy architecture-specific OCaml files.
+(copy_files %{project_root}/%{env:TARGET_ARCH=undefined}/*.{ml,mli})
+; Copy extracted OCaml files.
+(copy_files %{project_root}/extraction/compcert/*.{ml,mli})
+
+; Copy common OCaml files.
+(copy_files %{project_root}/backend/*.{ml,mli})
+(copy_files %{project_root}/cfrontend/*.{ml,mli})
+(copy_files %{project_root}/common/*.{ml,mli})
+(copy_files %{project_root}/cparser/*.{ml,mli})
+(copy_files %{project_root}/debug/*.{ml,mli})
+(copy_files %{project_root}/driver/*.{ml,mli})
+(copy_files %{project_root}/lib/*.{ml,mli})
+
+; Generate version.ml.
+(rule
+ (target version.ml)
+ (deps %{project_root}/VERSION)
+ (action
+  (with-stdout-to %{target}
+   (chdir %{workspace_root}
+   (run version_creator)))))
+
+; Compile library with coq code and all relevant ml/mli files.
+(library
+ (name compcert)
+ ; No need to prefix imports to allow transition to dune.
+ (wrapped false)
+ ; Runtime libraries
+ (modules_without_implementation c debugTypes dwarfTypes)
+ ; Driver is our runner which uses this library, GCC is unneeded file.
+ (modules :standard \ Driver GCC)
+ (flags (:include %{project_root}/dune-include/ocaml-flags.sexp))
+ (instrumentation (backend bisect_ppx))
+ (libraries menhirLib str unix))
+
+; Generate final compcert executable.
+(executable
+ (name Driver)
+ (modules Driver)
+ (flags (:include %{project_root}/dune-include/ocaml-flags.sexp))
+ ; Generate both bytecode and native code.
+ (modes byte native)
+ (instrumentation (backend bisect_ppx))
+ (libraries compcert))

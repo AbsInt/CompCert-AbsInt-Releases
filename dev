@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+scriptdir=$(dirname $(realpath $0))
+envdir=$(dirname $scriptdir)
+usage='Usage: ./dev [-help|--help] [options] [target]
+
+Supported backend targets are:
+    aarch64
+    arm
+    e5500
+    ppc
+    ppc-diab
+    ppcvle-diab
+    rv32
+    rv64
+    tricore
+    x32
+    x64
+
+Special targets:
+    all
+    proof
+    check-admitted
+    check-leftovers
+    check-proof
+    clean
+
+Options:
+    --coverage - only works for backend target
+'
+
+jlevel="-j auto" # Makes dune pick job level based on available cores.
+do_coverage=0
+arg=""
+
+while : ; do
+    case ${1:-} in
+        "")
+            break;;
+        -help|--help)
+            echo "$usage" 1>&2; exit 0;;
+        --coverage)
+            do_coverage=1;;
+        -j)
+            jlevel="-j ${2?need argument after -j}"
+            shift;;
+        -j*)
+            jlevel=$1;;
+        -*)
+            echo "Error: unknown option '$1'." 1>&2
+            echo "$usage" 1>&2
+            exit 2;;
+        *)
+            if test -n "$arg"; then echo "$usage" 1>&2; exit 2; fi
+            arg="$1";;
+    esac
+    shift
+done
+
+# try interactively get target using fzf
+if test -z "$arg"; then
+    if command -v fzf >/dev/null; then
+        supported_targets="aarch64 arm e5500 ppc ppc-diab ppcvle-diab rv32 rv64 tricore x32 x64"
+        commands="all proof check-admitted check-leftovers check-proof clean"
+        arg=$(for val in $supported_targets $commands; do echo $val; done | fzf)
+    else
+        echo "Error: fzf utility not found. Please pass target as argument." 1>&2
+        echo "$usage" 1>&2
+        exit 2
+    fi
+fi
+
+function dune () {
+    dunecmd=$1; shift
+    rest="$@"
+    duneflags="${jlevel} --stop-on-first-error"
+
+    if test -z "$dunecmd"; then
+        echo "Need command for dune."
+        exit 3
+    fi
+    cmd="dune $dunecmd $duneflags $rest"
+
+    echo $cmd
+    # Execute as command to not call this function recursively.
+    command $cmd
+}
+
+function compile () {
+    target=$1
+
+    case "$target" in
+        ppc)
+            arch_dir="powerpc"
+            config_target="ppc-eabi"
+            toolprefix="gcc/ppc/bin/powerpc-unknown-eabi-";;
+        e5500)
+            arch_dir="powerpc"
+            config_target="e5500-linux"
+            toolprefix="gcc/ppc/bin/powerpc-unknown-linux-gnu-";;
+        ppc-diab)
+            arch_dir="powerpc"
+            config_target="ppc-eabi-diab"
+            toolprefix="windriver/5.9.2.0/diab/5.9.2.0/LINUX386/bin/";;
+        ppcvle-diab)
+            arch_dir="powerpc_vle"
+            config_target="ppcvle-eabi-diab"
+            toolprefix="windriver/5.9.2.0/diab/5.9.2.0/LINUX386/bin/";;
+        arm)
+            arch_dir="arm"
+            config_target="armv7a-linux"
+            toolprefix="gcc/arm/bin/arm-multilib-linux-uclibcgnueabi-";;
+        aarch64)
+            arch_dir="aarch64"
+            config_target="aarch64-linux"
+            toolprefix="gcc/aarch64/bin/aarch64-unknown-linux-uclibc-";;
+        x32)
+            arch_dir="x86_32"
+            config_target="x86_32-linux"
+            toolprefix="gcc/x86-32/bin/i686-pc-linux-gnu-";;
+        x64)
+            arch_dir="x86_64"
+            config_target="x86_64-linux"
+            toolprefix="gcc/x86-64/bin/x86_64-unknown-linux-gnu-";;
+        rv32)
+            arch_dir="riscV"
+            config_target="rv32-linux"
+            toolprefix="gcc/riscv/bin/riscv32-unknown-linux-gnu-";;
+        rv64)
+            arch_dir="riscV"
+            config_target="rv64-linux"
+            toolprefix="gcc/riscv/bin/riscv64-unknown-linux-gnu-";;
+        tricore)
+            arch_dir="tricore"
+            config_target="tricore-eabi"
+            toolprefix="tricore/bin/tricore-elf-";;
+        *)
+            echo "$usage"
+            exit 2;;
+    esac
+
+    outdir=out/${target}
+    mkdir -p $outdir ${outdir}/runtime/
+
+    if [ -z ${exttoolprefix+x} ]; then
+        dune exec tools/configure.exe -- "$config_target" -toolprefix "${envdir}/${toolprefix}" -libdir runtime -ignore-coq-version -ignore-ocaml-version
+    else
+        dune exec tools/configure.exe -- "$config_target" -toolprefix "${exttoolprefix}" -libdir runtime -ignore-coq-version -ignore-ocaml-version
+    fi
+
+    # For ppc-vle we need to add some options to select the correct target, i.e. a powerpc variant that supports VLE and SPE
+    if test "$config_target" = "ppcvle-eabi-diab"; then
+        echo "Patching Makefile.config for ppc-vle."
+        sed -i "s@CASMRUNTIME=das -Xalign-value@CASMRUNTIME=das -Xalign-value -tPPCE200Z420N3VEG:windiss@g" Makefile.config
+        sed -i "s@_OPTIONS=@_OPTIONS=-tPPCE200Z420N3VEG:windiss @g" Makefile.config
+    fi
+
+    # Remove files from previous build.
+    rm -f ${outdir}/{ccomp,clightgen,compcert.ini} 
+
+    #
+    # Build ccomp & clightgen binaries, compcert.ini for target.
+    #
+    flags=""
+    if [[ "$do_coverage" = 1 ]]; then
+        flags="$flags --instrument-with bisect_ppx"
+    fi
+    # Build _CoqProject first so that when a proof fails the environment is set up correctly.
+    dune build _CoqProject
+    # We build the default context here because the OCaml Platform extension for VSCode breaks completely if the default context is not built.
+    dune build $flags ccomp clightgen compcert.ini
+
+    # Compile runtime library
+    # Note, put bisect files into /tmp so that they don't pollute the source tree.
+    BISECT_FILE=/tmp/bisect-runtime- make -C runtime
+
+    # Backup files into out/$target.
+    cp ccomp ${outdir}
+    cp clightgen ${outdir}
+    cp compcert.ini ${outdir}
+    cp runtime/libcompcert.a ${outdir}/runtime/
+
+    # Run coverage tests like in package script.
+    if [[ "$do_coverage" -eq 1 ]]; then
+        coverage_dir=${scriptdir}/coverage/coverage_tests
+        if [[ -d $coverage_dir ]]; then
+            pushd $coverage_dir
+            perl run_coverage.pl $arch_dir
+            output_dir=${scriptdir}/_coverage/$arch_dir
+            report_dir=reports/$arch_dir
+            source_dir=${scriptdir}/_build/default
+            bisect-ppx-report html -o $output_dir --coverage-path=$report_dir --source-path $source_dir
+
+            echo
+            echo -e "Finished generating coverage report.\nOpen '_coverage/${arch_dir}/index.html'"
+            echo
+            popd
+        else
+            echo
+            echo "ERROR: Coverage dir does not exist"
+            echo "Run 'git clone git@gitlab.absint.com:absint/tests/compcert.git coverage'"
+            exit 4
+        fi
+    fi
+}
+
+function generate_dot_merlin () {
+    STDLIB=$(ocamlc -config-var standard_library)
+    SOURCE_ROOT=$scriptdir
+
+    cat > .merlin <<EOF
+# File generated by ./dev script.
+# Template generated by "dune ocaml dump-dot-merlin build/compcert > .merlin.tmp"
+# Then modified to include extracted OCaml sources and avoid absolute paths.
+# Comment all the compcert/ lines and uncomment the clightgen/ lines when you need merlin features for clightgen-only files.
+#   Does not work together at the moment.
+
+EXCLUDE_QUERY_DIR
+STDLIB $STDLIB
+SOURCE_ROOT $SOURCE_ROOT
+
+B ../usr/lib/ocaml/menhirLib
+B ../usr/lib/ocaml/str
+B ../usr/lib/ocaml/unix
+B _build/default/build/compcert/.Driver.eobjs/byte
+B _build/default/build/compcert/.compcert.objs/byte
+#B _build/default/build/clightgen/.ExportDriver.eobjs/byte
+#B _build/default/build/clightgen/.clightgen.objs/byte
+
+S ../usr/lib/ocaml/menhirLib
+S ../usr/lib/ocaml/str
+S ../usr/lib/ocaml/unix
+S backend
+S cfrontend
+S common
+S cparser
+S debug
+S driver
+S export
+S lib
+S aarch64
+S arm
+S powerpc
+S powerpc_vle
+S riscV
+S tricore
+S x86
+S _build/default/extraction/compcert
+#S _build/default/extraction/clightgen
+
+INDEX _build/default/extraction/compcert/.Driver.eobjs/cctx.ocaml-index
+INDEX _build/default/extraction/compcert/.compcert.objs/cctx.ocaml-index
+#INDEX _build/default/extraction/clightgen/.ExportDriver.eobjs/cctx.ocaml-index
+#INDEX _build/default/extraction/clightgen/.clightgen.objs/cctx.ocaml-index
+INDEX _build/default/tools/.configure.eobjs/cctx.ocaml-index
+INDEX _build/default/tools/.gen_documentation.eobjs/cctx.ocaml-index
+INDEX _build/default/tools/.version_creator.eobjs/cctx.ocaml-index
+INDEX _build/default/tools/.config_creator.eobjs/cctx.ocaml-index
+INDEX _build/default/tools/.ini_creator.eobjs/cctx.ocaml-index
+INDEX _build/default/tools/.modorder.eobjs/cctx.ocaml-index
+INDEX _build/default/tools/.ndfun.eobjs/cctx.ocaml-index
+
+FLG -bin-annot -g -strict-sequence -safe-string -warn-error +a -w +a -w -fragile-match -w -missing-record-field-pattern -w -unused-var-strict -w -missing-mli -w -ambiguous-name -w -ignored-extra-argument -w -unused-value-declaration -w -unused-open -w -unused-type-declaration -w -unused-rec-flag -w -ambiguous-name -w -open-shadow-identifier -w -open-shadow-label-constructor -w -unreachable-case -w -unused-module -w -unused-functor-parameter -g
+EOF
+}
+
+case "$arg" in
+    all)
+        dune exec tools/configure.exe -- all -ignore-coq-version -ignore-ocaml-version
+        dune build @proof
+        dune build @extraction
+        dune build @compile-ccomp
+        dune build @compile-clightgen;;
+    proof)
+        dune build @proof;;
+    check-admitted)
+        dune build @check-admitted;;
+    check-leftovers)
+        dune build @check-leftovers;;
+    check-proof)
+        dune build @check-proof --no-buffer;;
+    clean)
+        dune clean
+        rm -f out/*/{ccomp,clightgen,compcert.ini,compcert.config,Makefile.config,runtime/libcompcert.a} 
+        rm -f ccomp clightgen compcert.ini compcert.config Makefile.config _CoqProject runtime/libcompcert.a;;
+    *)
+        generate_dot_merlin
+        compile "$arg";;
+esac

@@ -1,0 +1,15 @@
+; Copy architecture-specific dependencies of the extraction module.
+(copy_files %{project_root}/%{env:TARGET_ARCH=undefined}/{extractionMachdep.v,extractionMachdepClight.v})
+
+; Generate "new" extraction.v to create an explicit dependency on extractionMachdep(Clight).v.
+; If we use extraction.v directly, coqdep fails to find the machdep files as dependencies
+;  so they are not copied here and consequently not found on the loadpath.
+; Manually adding them to the loadpath in the coq.extraction stanza's flags field works for running the extraction,
+;  but since there is no dependency the extraction is not rerun if the files change.
+(rule
+ (deps ../extraction.v extractionMachdep.v extractionMachdepClight.v)
+ (targets extraction.v)
+ (action (copy ../extraction.v extraction.v)))
+
+; Import dynamically created dune.inc that constains (coq.extraction) stanza.
+(dynamic_include ../arch-modules/dune.inc)

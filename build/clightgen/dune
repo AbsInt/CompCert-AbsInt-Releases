@@ -1,0 +1,46 @@
+; Copy architecture-specific OCaml files.
+(copy_files %{project_root}/%{env:TARGET_ARCH=undefined}/{CBuiltins.ml,Machregsaux.ml,Machregsaux.mli})
+; Copy extracted OCaml files.
+(copy_files %{project_root}/extraction/clightgen/*.{ml,mli})
+
+; Copy common OCaml files.
+(copy_files %{project_root}/backend/{Machregsnames.ml,AisAnnot.ml})
+(copy_files %{project_root}/cfrontend/*.{ml,mli})
+(copy_files %{project_root}/common/{PrintAST.ml,Sections.{ml,mli}})
+(copy_files %{project_root}/cparser/*.{ml,mli})
+(copy_files %{project_root}/debug/{Debug.{ml,mli},DwarfTypes.mli})
+(copy_files %{project_root}/driver/{Configuration.{ml,mli},Clflags.ml,CommonOptions.ml,Timing.ml,Driveraux.{ml,mli},Frontend.{ml,mli}})
+(copy_files %{project_root}/export/*.{ml,mli})
+(copy_files %{project_root}/lib/*.{ml,mli})
+
+; Generate version.ml.
+(rule
+ (target version.ml)
+ (deps %{project_root}/VERSION)
+ (action
+  (with-stdout-to %{target}
+   (chdir %{workspace_root}
+   (run version_creator)))))
+
+; Compile library with coq code and all other relevant ml/mli files from source code.
+(library
+ (name clightgen)
+ ; No need to prefix imports to allow transition to dune.
+ (wrapped false)
+ ; Runtime libraries
+ (modules_without_implementation c dwarfTypes)
+ ; ExportDriver is our runner which uses this library, GCC is an unneeded file.
+ (modules :standard \ ExportDriver GCC)
+ (instrumentation (backend bisect_ppx))
+ (flags (:include %{project_root}/dune-include/ocaml-flags.sexp))
+ (libraries menhirLib str unix))
+
+; Generate final clightgen executable.
+(executable
+ (name ExportDriver)
+ (modules ExportDriver)
+ (flags (:include %{project_root}/dune-include/ocaml-flags.sexp))
+ ; Generate both bytecode and native code.
+ (modes byte native)
+ (instrumentation (backend bisect_ppx))
+ (libraries clightgen))

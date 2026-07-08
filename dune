@@ -1,0 +1,175 @@
+;; --- Main generation rules as in Makefile ---
+;; Because the files are promoted to the source tree we only build them one time in the default context.
+
+(rule
+ (target compcert.ini)
+ (deps Makefile.config)
+ (mode (promote (until-clean)))
+ (enabled_if (= "default" %{context_name}))
+ (action (with-stdout-to %{target}
+  (chdir %{workspace_root}
+  (run ini_creator %{deps})))))
+
+(rule
+ (target compcert.config)
+ (deps VERSION Makefile.config)
+ (mode (promote (until-clean)))
+ (enabled_if (= "default" %{context_name}))
+ (action (with-stdout-to %{target}
+  (chdir %{workspace_root}
+  (run config_creator)))))
+
+; Runnable ccomp binary.
+; libcompcert.a still needs to be built separately.
+(rule
+ (target ccomp)
+ (deps compcert.ini (:exe build/compcert/Driver.exe))
+ (mode (promote (until-clean)))
+ (enabled_if (= "default" %{context_name}))
+ (action
+  (copy %{exe} ccomp)))
+
+; Runnable clightgen binary.
+(rule
+ (target clightgen)
+ (deps compcert.ini (:exe build/clightgen/ExportDriver.exe))
+ (mode (promote (until-clean)))
+ (enabled_if (= "default" %{context_name}))
+ (action
+  (copy %{exe} clightgen)))
+
+; _CoqProject
+; NB: We hard code the default dune context because we use that for development. Other contexts are used only for parallel builds.
+(rule
+ (target _CoqProject)
+ (mode (promote (until-clean)))
+ (enabled_if (= "default" %{context_name}))
+ (action
+  (write-file _CoqProject
+   "\| -R _build/default/theory/lib compcert.lib
+   "\| -R _build/default/theory/common compcert.common
+   "\| -R _build/default/theory/TargetArch compcert.TargetArch
+   "\| -R _build/default/theory/backend compcert.backend
+   "\| -R _build/default/theory/cfrontend compcert.cfrontend
+   "\| -R _build/default/theory/driver compcert.driver
+   "\| -R _build/default/theory/cparser compcert.cparser
+   "\| -R _build/default/theory/export compcert.export
+   "\| -R _build/default/MenhirLib MenhirLib
+   "\| -R _build/default/flocq Flocq
+  )))
+
+; Includes for coqchk.
+(rule
+ (target COQINCLUDES)
+ (action
+  (write-file COQINCLUDES
+   "-R theory/lib compcert.lib \
+    -R theory/common compcert.common \
+    -R theory/TargetArch compcert.TargetArch \
+    -R theory/backend compcert.backend \
+    -R theory/cfrontend compcert.cfrontend \
+    -R theory/driver compcert.driver \
+    -R theory/cparser compcert.cparser \
+    -R theory/export compcert.export \
+    -R flocq Flocq \
+    -R MenhirLib MenhirLib")))
+
+;; --- Binary shorthands ---
+(env
+ ; For all build envs add tools to path -> makes them available for rules / preprocessing.
+ (_ 
+  (binaries tools/ndfun.exe tools/modorder.exe tools/version_creator.exe tools/ini_creator.exe tools/config_creator.exe tools/gen_documentation.exe)))
+
+;; --- Dune aliases for common operations ---
+; Compile all relevant Coq .v files to .vo files, i.e. run the proofs.
+(alias
+ (name proof)
+ (deps (glob_files_rec theory/*.vo)))
+
+; Extract all relevant Coq .v files into .ml and .mli files, i.e. run the extraction.
+(alias
+ (name extraction)
+ (deps (glob_files_rec extraction/compcert/*.{ml,mli})
+       (glob_files_rec extraction/clightgen/*.{ml,mli})))
+
+; Build the executable Driver.exe.
+(alias
+ (name compile-ccomp)
+ (deps build/compcert/Driver.exe))
+
+; Build the executable ExportDriver.exe.
+(alias
+ (name compile-clightgen)
+ (deps build/clightgen/ExportDriver.exe))
+
+;; --- Soundness & cleanliness checks ---
+
+; Run the most important checks unter the @runtest alias.
+(alias
+ (name runtest)
+ (deps (alias check-admitted)
+       (alias check-proof)))
+
+; Check if there are any uses of the admit tactic or Admitted command.
+(rule
+ (alias check-admitted)
+ ; Windows uses different command syntax.
+ (enabled_if (not (= %{os_type} Win32)))
+ ; The action runs in the build context, so we declare a dependency on all relevant Coq files to copy the latest state into the _build directory.
+ ; Also declare dependency on (universe) to not cache the result.
+ (deps (universe) (glob_files_rec theory/**.v))
+ ; Dune swallows stdout if the build command fails so we capture and print it using $OUT.
+ (action
+  (system "OUT=$(grep -r -w 'admit\\|Admitted\\|ADMITTED' theory/); if test $? -eq 0; then echo $OUT; exit 2; else echo %{context_name}: Nothing admitted.; fi")))
+
+(rule
+ (alias check-admitted)
+ (enabled_if (= %{os_type} Win32))
+ (deps (universe) (glob_files_rec theory/**.v))
+ (action
+  (system "grep -r -w \"admit\\|Admitted\\|ADMITTED\" theory & if not errorlevel 1 (exit 2) else echo %{context_name}: Nothing admitted.")))
+
+; Check if there are uses of query commands left in source files.
+(rule
+ (alias check-leftovers)
+ ; Windows uses different command syntax.
+ (enabled_if (not (= %{os_type} Win32)))
+ ; The action runs in the build context, so we declare a dependency on all relevant Coq files to copy the latest state into the _build directory.
+ ; Also declare dependency on (universe) to not cache the result.
+ (deps (universe) (glob_files_rec theory/**.v))
+ ; Dune swallows stdout if the build command fails so we capture and print it using $OUT.
+ (action
+  (system "OUT=$(grep -r -w '^Check\\|^Print\\|^Search' theory/); if test $? -eq 0; then echo $OUT; exit 2; else echo %{context_name}: No leftover interactive commands.; fi")))
+
+(rule
+ (alias check-leftovers)
+ (enabled_if (= %{os_type} Win32))
+ (deps (universe) (glob_files_rec theory/**.v))
+ (action
+  (system "grep -r -w \"^Check\\|^Print\\|^Search\" theory & if not errorlevel 1 (exit 2) else echo %{context_name}: No leftover interactive commands.")))
+
+; Run the coqchk tool.
+; Dune aims to support coqchk in version 1.0 of Coq support, but at the moment we must run it manually.
+;   see https://github.com/ocaml/dune/issues/1998
+; Also declare dependency on (universe) to not cache the result.
+; The result is written into a separate file so that we can check it
+(rule
+ (alias check-proof)
+ (target coqchk-result.txt)
+ (mode (promote (until-clean)))
+ (deps (universe) COQINCLUDES
+  (glob_files_rec theory/*.vo))
+ (action
+  (with-stderr-to %{target}
+   (system "coqchk -o %{read:COQINCLUDES} compcert.driver.Complements \
+                                         compcert.export.Clightdefs \
+                                         compcert.export.Csyntaxdefs \
+                                         compcert.cfrontend.Initializersproof"))))
+
+; Print the includes that coqchk and the IDE use.
+(rule
+ (alias print-includes)
+ ; Also declare dependency on (universe) to not cache the result.
+ (deps (universe) (:incl COQINCLUDES))
+ (enabled_if (= "default" %{context_name}))
+ (action (cat %{incl})))
